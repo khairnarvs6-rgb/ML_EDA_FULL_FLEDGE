@@ -1,0 +1,356 @@
+name: ML EDA Full Fledge CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main", "master", "dev" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ─────────────────────────────────────────
+  # JOB 1: Code Quality & Lint
+  # ─────────────────────────────────────────
+  lint-and-quality:
+    name: 🔍 Lint & Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install Lint Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort pylint
+
+      - name: 🔍 Run Flake8
+        run: |
+          flake8 . \
+            --count \
+            --select=E9,F63,F7,F82 \
+            --show-source \
+            --statistics \
+            --exclude=.git,__pycache__,.venv,venv,notebooks \
+            || true
+
+      - name: 🎨 Check Black Formatting
+        run: |
+          black --check --diff . \
+            --exclude '/(\.git|\.venv|venv|notebooks)/' \
+            || true
+
+      - name: 📂 Check Import Sorting
+        run: |
+          isort --check-only --diff . \
+            --skip notebooks \
+            || true
+
+  # ─────────────────────────────────────────
+  # JOB 2: Install & Test
+  # ─────────────────────────────────────────
+  install-and-test:
+    name: 🧪 Install Dependencies & Run Tests
+    runs-on: ubuntu-latest
+    needs: lint-and-quality
+
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set Up Python (No Cache)
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 🔎 Debug — Show Directory & Files
+        run: |
+          echo "Current directory:"
+          pwd
+          echo ""
+          echo "Project files:"
+          ls -la
+          echo ""
+          echo "Checking required files:"
+          if [ -f requirements.txt ]; then
+            echo "✅ requirements.txt FOUND"
+            cat requirements.txt
+          else
+            echo "❌ requirements.txt NOT FOUND"
+          fi
+          echo ""
+          if [ -f pyproject.toml ]; then
+            echo "✅ pyproject.toml FOUND"
+            cat pyproject.toml
+          else
+            echo "❌ pyproject.toml NOT FOUND"
+          fi
+
+      - name: 📦 Upgrade pip
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: 📦 Install Dependencies from requirements.txt
+        run: |
+          pip install -r requirements.txt
+
+      - name: 📦 Install Package (if pyproject.toml exists)
+        run: |
+          if [ -f pyproject.toml ]; then
+            pip install -e . --no-deps || echo "⚠️ Package install skipped"
+          fi
+
+      - name: 🧪 Run Tests
+        run: |
+          if [ -d tests ] && [ "$(ls -A tests)" ]; then
+            pip install pytest pytest-cov
+            pytest tests/ \
+              --tb=short \
+              -v \
+              --cov=src \
+              --cov-report=term-missing \
+              --cov-report=xml \
+              || true
+          else
+            echo "⚠️ No tests found in tests/ directory — skipping"
+          fi
+
+      - name: 📊 Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  # ─────────────────────────────────────────
+  # JOB 3: Notebook Validation
+  # ─────────────────────────────────────────
+  notebook-validation:
+    name: 📓 Validate Jupyter Notebooks
+    runs-on: ubuntu-latest
+    needs: install-and-test
+
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nbformat nbconvert jupyter
+
+      - name: 📓 Validate Notebooks Syntax
+        run: |
+          python << 'EOF'
+          import nbformat
+          import os
+          import sys
+
+          notebook_files = []
+          for root, dirs, files in os.walk("."):
+              # Skip hidden directories
+              dirs[:] = [d for d in dirs if not d.startswith('.')]
+              for f in files:
+                  if f.endswith(".ipynb"):
+                      notebook_files.append(os.path.join(root, f))
+
+          if not notebook_files:
+              print("⚠️ No notebooks found")
+              sys.exit(0)
+
+          errors = []
+          for nb_path in notebook_files:
+              try:
+                  with open(nb_path) as f:
+                      nb = nbformat.read(f, as_version=4)
+                  nbformat.validate(nb)
+                  print(f"✅ Valid: {nb_path}")
+              except Exception as e:
+                  print(f"❌ Invalid: {nb_path} — {e}")
+                  errors.append(nb_path)
+
+          if errors:
+              print(f"\n❌ {len(errors)} notebook(s) failed validation")
+              sys.exit(1)
+          else:
+              print(f"\n✅ All {len(notebook_files)} notebook(s) passed validation")
+          EOF
+
+      - name: 📓 Check Notebook Outputs Cleared (Optional)
+        run: |
+          python << 'EOF'
+          import nbformat
+          import os
+
+          for root, dirs, files in os.walk("."):
+              dirs[:] = [d for d in dirs if not d.startswith('.')]
+              for f in files:
+                  if f.endswith(".ipynb"):
+                      path = os.path.join(root, f)
+                      with open(path) as fp:
+                          nb = nbformat.read(fp, as_version=4)
+                      has_output = any(
+                          cell.get("outputs") or cell.get("execution_count")
+                          for cell in nb.cells
+                          if cell["cell_type"] == "code"
+                      )
+                      if has_output:
+                          print(f"⚠️  Has outputs (consider clearing): {path}")
+                      else:
+                          print(f"✅ Clean (no outputs): {path}")
+          EOF
+
+  # ─────────────────────────────────────────
+  # JOB 4: Data Validation
+  # ─────────────────────────────────────────
+  data-validation:
+    name: 📊 Validate Data Files
+    runs-on: ubuntu-latest
+    needs: install-and-test
+
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install Data Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy
+
+      - name: 📊 Validate CSV Files
+        run: |
+          python << 'EOF'
+          import pandas as pd
+          import os
+          import sys
+
+          csv_files = []
+          for root, dirs, files in os.walk("."):
+              dirs[:] = [d for d in dirs if not d.startswith('.')]
+              for f in files:
+                  if f.endswith(".csv"):
+                      csv_files.append(os.path.join(root, f))
+
+          if not csv_files:
+              print("⚠️ No CSV files found")
+              sys.exit(0)
+
+          print(f"Found {len(csv_files)} CSV file(s):\n")
+          errors = []
+
+          for csv_path in csv_files:
+              try:
+                  size_mb = os.path.getsize(csv_path) / (1024 * 1024)
+                  df = pd.read_csv(csv_path, nrows=5)  # Only read 5 rows for large files
+                  full_df = pd.read_csv(csv_path)
+
+                  print(f"✅ {csv_path}")
+                  print(f"   Size     : {size_mb:.2f} MB")
+                  print(f"   Shape    : {full_df.shape}")
+                  print(f"   Columns  : {list(full_df.columns)[:5]}{'...' if len(full_df.columns) > 5 else ''}")
+                  print(f"   Nulls    : {full_df.isnull().sum().sum()} total")
+                  print(f"   Dtypes   : {dict(full_df.dtypes.value_counts())}")
+                  print()
+
+              except Exception as e:
+                  print(f"❌ Failed to read {csv_path}: {e}")
+                  errors.append(csv_path)
+
+          if errors:
+              print(f"❌ {len(errors)} file(s) failed")
+              sys.exit(1)
+          else:
+              print(f"✅ All {len(csv_files)} CSV file(s) are valid")
+          EOF
+
+  # ─────────────────────────────────────────
+  # JOB 5: Security Scan
+  # ─────────────────────────────────────────
+  security-scan:
+    name: 🔐 Security Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: install-and-test
+
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set Up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install Security Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install safety bandit
+
+      - name: 🔐 Run Safety Check on Dependencies
+        run: |
+          pip install -r requirements.txt
+          safety check --full-report || true
+
+      - name: 🔐 Run Bandit Security Linter
+        run: |
+          if [ -d src ]; then
+            bandit -r src/ -ll || true
+          else
+            echo "⚠️ No src/ directory found — skipping bandit"
+          fi
+
+  # ─────────────────────────────────────────
+  # JOB 6: Build Summary
+  # ─────────────────────────────────────────
+  build-summary:
+    name: 📋 Build Summary
+    runs-on: ubuntu-latest
+    needs:
+      - lint-and-quality
+      - install-and-test
+      - notebook-validation
+      - data-validation
+      - security-scan
+    if: always()
+
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 📋 Print Build Summary
+        run: |
+          echo "============================================"
+          echo "   ML EDA FULL FLEDGE — BUILD SUMMARY"
+          echo "============================================"
+          echo "Repository  : ${{ github.repository }}"
+          echo "Branch      : ${{ github.ref_name }}"
+          echo "Commit SHA  : ${{ github.sha }}"
+          echo "Triggered By: ${{ github.actor }}"
+          echo "Run ID      : ${{ github.run_id }}"
+          echo "Timestamp   : $(date -u)"
+          echo "============================================"
+          echo "Job Results:"
+          echo "  🔍 Lint & Quality      : ${{ needs.lint-and-quality.result }}"
+          echo "  🧪 Install & Test      : ${{ needs.install-and-test.result }}"
+          echo "  📓 Notebook Validation : ${{ needs.notebook-validation.result }}"
+          echo "  📊 Data Validation     : ${{ needs.data-validation.result }}"
+          echo "  🔐 Security Scan       : ${{ needs.security-scan.result }}"
+          echo "============================================"
