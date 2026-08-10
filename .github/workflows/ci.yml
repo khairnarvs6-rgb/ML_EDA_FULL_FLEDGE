@@ -1,0 +1,211 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+    branches:
+      - main
+      - master
+
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # =========================================================
+      # 1. Checkout source code
+      # =========================================================
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+
+      # =========================================================
+      # 2. Setup Python
+      # =========================================================
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+
+      # =========================================================
+      # 3. Verify project files
+      # =========================================================
+
+      - name: Verify Project Structure
+        run: |
+          echo "Current directory:"
+          pwd
+
+          echo "Project files:"
+          ls -la
+
+          echo "Checking required files:"
+          test -f requirements.txt
+          test -f pyproject.toml
+          test -f Makefile
+          test -f Dockerfile
+
+          echo "Source files:"
+          ls -la src/
+
+          echo "Test files:"
+          ls -la tests/
+
+
+      # =========================================================
+      # 4. Install Python dependencies
+      # =========================================================
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest ruff
+
+
+      # =========================================================
+      # 5. Verify installed packages
+      # =========================================================
+
+      - name: Verify Python Environment
+        run: |
+          python --version
+          pip --version
+          python -c "import numpy; print('NumPy:', numpy.__version__)"
+          python -c "import pandas; print('Pandas:', pandas.__version__)"
+          python -c "import sklearn; print('Scikit-learn:', sklearn.__version__)"
+          python -c "import scipy; print('SciPy:', scipy.__version__)"
+          python -c "import matplotlib; print('Matplotlib:', matplotlib.__version__)"
+          python -c "import seaborn; print('Seaborn:', seaborn.__version__)"
+          python -c "import joblib; print('Joblib:', joblib.__version__)"
+
+
+      # =========================================================
+      # 6. Lint
+      # =========================================================
+
+      - name: Lint Code with Ruff
+        run: |
+          python -m ruff check src/ tests/
+
+
+      # =========================================================
+      # 7. Check formatting
+      # =========================================================
+
+      - name: Check Code Formatting
+        run: |
+          python -m ruff format --check src/ tests/
+
+
+      # =========================================================
+      # 8. Run unit and integration tests
+      # =========================================================
+
+      - name: Run Pytest
+        run: |
+          python -m pytest tests/ -v
+
+
+      # =========================================================
+      # 9. Dataset pipeline
+      # =========================================================
+
+      - name: Run Dataset Pipeline
+        run: |
+          python -m src.dataset
+
+
+      # =========================================================
+      # 10. Feature engineering
+      # =========================================================
+
+      - name: Run Feature Engineering
+        run: |
+          python -m src.features
+
+
+      # =========================================================
+      # 11. Train ML model
+      # =========================================================
+
+      - name: Train ML Model
+        run: |
+          python -m src.train
+
+
+      # =========================================================
+      # 12. Generate predictions
+      # =========================================================
+
+      - name: Run Prediction
+        run: |
+          python -m src.predict
+
+
+      # =========================================================
+      # 13. Generate reports
+      # =========================================================
+
+      - name: Generate Reports
+        run: |
+          python -m src.reports
+
+
+      # =========================================================
+      # 14. Verify generated artifacts
+      # =========================================================
+
+      - name: Verify ML Artifacts
+        run: |
+          echo "Reports:"
+          ls -la reports/ || true
+
+          echo "Figures:"
+          ls -la reports/figures/ || true
+
+          echo "Models:"
+          ls -la models/ || true
+
+
+      # =========================================================
+      # 15. Upload reports
+      # =========================================================
+
+      - name: Upload ML Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-reports
+          path: |
+            reports/
+            models/
+          if-no-files-found: warn
+
+
+      # =========================================================
+      # 16. Build Docker image
+      # =========================================================
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t ml-eda-full-fledge:latest \
+            .
+
+
+      # =========================================================
+      # 17. Verify Docker image
+      # =========================================================
+
+      - name: Verify Docker Image
+        run: |
+          docker images ml-eda-full-fledge:latest
