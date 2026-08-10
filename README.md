@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ML_EDA_full_fledge: Loan Default EDA & Feature Selection Project
 
 A production-grade, end-to-end Exploratory Data Analysis (EDA), Feature Engineering, and Feature Selection project structured according to the [Cookiecutter Data Science](https://cookiecutter-data-science.drivendata.org/) (CCDS) standard.
@@ -121,3 +122,6 @@ make all
    - **ROC-AUC:** **0.8847**
    - **PR-AUC:** **0.8272**
    - **Accuracy:** **87.92%**
+=======
+# ML_EDA_FULL_FLEDGE
+>>>>>>> 62a19068c8fa29189c4ac9cd9b6ebda86b84b414
